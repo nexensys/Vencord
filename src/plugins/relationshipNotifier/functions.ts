@@ -17,11 +17,12 @@
 */
 
 import { getUniqueUsername, openUserProfile } from "@utils/discord";
+import { ChannelType, RelationshipType } from "@vencord/discord-types/enums";
 import { UserUtils } from "@webpack/common";
 
 import settings from "./settings";
-import { ChannelDelete, ChannelType, GuildDelete, RelationshipRemove, RelationshipType } from "./types";
-import { deleteGroup, deleteGuild, getGroup, getGuild, notify } from "./utils";
+import { ChannelDelete, GuildDelete, RelationshipRemove } from "./types";
+import { deleteGroup, deleteGuild, getGroup, getGuild, GuildAvailabilityStore, notify } from "./utils";
 
 let manuallyRemovedFriend: string | undefined;
 let manuallyRemovedGuild: string | undefined;
@@ -63,7 +64,7 @@ export async function onRelationshipRemove({ relationship: { type, id } }: Relat
 
 export function onGuildDelete({ guild: { id, unavailable } }: GuildDelete) {
     if (!settings.store.servers) return;
-    if (unavailable) return;
+    if (unavailable || GuildAvailabilityStore.isUnavailable(id)) return;
 
     if (manuallyRemovedGuild === id) {
         deleteGuild(id);

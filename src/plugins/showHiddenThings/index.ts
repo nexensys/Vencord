@@ -16,29 +16,33 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { definePluginSettings, migratePluginSettings } from "@api/Settings";
+import { definePluginSettings } from "@api/Settings";
 import { Devs } from "@utils/constants";
-import definePlugin, { OptionType } from "@utils/types";
+import { Logger } from "@utils/Logger";
+import definePlugin, { OptionType, PluginSettingDef } from "@utils/types";
+import { GuildMember, Role } from "@vencord/discord-types";
+
+const opt = (description: string) => ({
+    type: OptionType.BOOLEAN,
+    description,
+    default: true,
+    restartNeeded: true
+} satisfies PluginSettingDef);
 
 const settings = definePluginSettings({
-    showTimeouts: {
-        type: OptionType.BOOLEAN,
-        description: "Show member timeout icons in chat.",
-        default: true,
-    },
-    showInvitesPaused: {
-        type: OptionType.BOOLEAN,
-        description: "Show the invites paused tooltip in the server list.",
-        default: true,
-    },
+    showTimeouts: opt("Show member timeout icons in chat."),
+    showInvitesPaused: opt("Show the invites paused tooltip in the server list."),
+    showModView: opt("Show the member mod view context menu item in all servers.")
 });
 
-migratePluginSettings("ShowHiddenThings", "ShowTimeouts");
 export default definePlugin({
     name: "ShowHiddenThings",
-    tags: ["ShowTimeouts", "ShowInvitesPaused"],
-    description: "Displays various moderator-only elements regardless of permissions.",
+    searchTerms: ["ShowTimeouts", "ShowInvitesPaused", "ShowModView", "DisableDiscoveryFilters"],
+    description: "Displays various hidden & moderator-only things regardless of permissions.",
+    tags: ["Servers", "Utility"],
     authors: [Devs.Dolfies],
+    settings,
+
     patches: [
         {
             find: "showCommunicationDisabledStyles",
@@ -49,13 +53,47 @@ export default definePlugin({
             },
         },
         {
-            find: "useShouldShowInvitesDisabledNotif:",
+            find: "INVITES_DISABLED)||",
             predicate: () => settings.store.showInvitesPaused,
             replacement: {
-                match: /\i\.\i\.can\(\i\.Permissions.MANAGE_GUILD,\i\)/,
+                match: /\i\.\i\.can\(\i\.\i.MANAGE_GUILD,\i\)/,
                 replace: "true",
             },
+        },
+        {
+            find: /,checkElevated:!1}\),\i\.\i\)}(?<=getCurrentUser\(\);return.+?)/,
+            predicate: () => settings.store.showModView,
+            replacement: {
+                match: /return \i\.\i\(\i\.\i\(\{user:\i,context:\i,checkElevated:!1\}\),\i\.\i\)/,
+                replace: "return true",
+            }
+        },
+        // fixes a bug where Members page must be loaded to see highest role, why is Discord depending on MemberSafetyStore.getEnhancedMember for something that can be obtained here?
+        {
+            find: "#{intl::GUILD_MEMBER_MOD_VIEW_HIGHEST_ROLE}),children:",
+            predicate: () => settings.store.showModView,
+            replacement: {
+                match: /(#{intl::GUILD_MEMBER_MOD_VIEW_HIGHEST_ROLE}.{0,80})role:\i(?<=\[\i\.roles,\i\.highestRoleId,(\i)\].+?)/,
+                replace: (_, rest, roles) => `${rest}role:$self.getHighestRole(arguments[0],${roles})`,
+            }
+        },
+        // allows you to open mod view on yourself
+        {
+            find: 'action:"PRESS_MOD_VIEW",icon:',
+            predicate: () => settings.store.showModView,
+            replacement: {
+                match: /\i(?=\?null)/,
+                replace: "false"
+            }
         }
     ],
-    settings,
+
+    getHighestRole({ member }: { member: GuildMember; }, roles: Role[]): Role | undefined {
+        try {
+            return roles.find(role => role.id === member.highestRoleId);
+        } catch (e) {
+            new Logger("ShowHiddenThings").error("Failed to find highest role", e);
+            return undefined;
+        }
+    }
 });

@@ -18,22 +18,22 @@
 
 import "./styles.css";
 
+import { isPluginEnabled } from "@api/PluginManager";
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { Flex } from "@components/Flex";
 import { CopyIcon, LinkIcon } from "@components/Icons";
+import OpenInAppPlugin from "@plugins/openInApp";
 import { Devs } from "@utils/constants";
-import { copyWithToast } from "@utils/misc";
+import { copyWithToast } from "@utils/discord";
 import definePlugin, { OptionType } from "@utils/types";
-import { findByCodeLazy, findByPropsLazy, findComponentByCodeLazy, findStoreLazy } from "@webpack";
-import { Text, Tooltip, UserProfileStore } from "@webpack/common";
-import { User } from "discord-types/general";
+import { ConnectedAccount, User } from "@vencord/discord-types";
+import { findByCodeLazy, findByPropsLazy } from "@webpack";
+import { Tooltip, UserProfileStore } from "@webpack/common";
 
 import { VerifiedIcon } from "./VerifiedIcon";
 
-const Section = findComponentByCodeLazy(".lastSection", "children:");
-const ThemeStore = findStoreLazy("ThemeStore");
-const platformHooks: { useLegacyPlatformType(platform: string): string; } = findByPropsLazy("useLegacyPlatformType");
+const useLegacyPlatformType: (platform: string) => string = findByCodeLazy(".TWITTER_LEGACY:");
 const platforms: { get(type: string): ConnectionPlatform; } = findByPropsLazy("isSupported", "getByUrl");
 const getProfileThemeProps = findByCodeLazy(".getPreviewThemeColors", "primaryColor:");
 
@@ -62,24 +62,20 @@ const settings = definePluginSettings({
     }
 });
 
-interface Connection {
-    type: string;
-    id: string;
-    name: string;
-    verified: boolean;
-}
-
 interface ConnectionPlatform {
-    getPlatformUserUrl(connection: Connection): string;
+    getPlatformUserUrl(connection: ConnectedAccount): string;
     icon: { lightSVG: string, darkSVG: string; };
 }
 
-const profilePopoutComponent = ErrorBoundary.wrap((props: { user: User, displayProfile; }) =>
-    <ConnectionsComponent id={props.user.id} theme={getProfileThemeProps(props).theme} />
-);
-
-const profilePanelComponent = ErrorBoundary.wrap(({ id }: { id: string; }) =>
-    <ConnectionsComponent id={id} theme={ThemeStore.theme} />
+const profilePopoutComponent = ErrorBoundary.wrap(
+    (props: { user: User; displayProfile?: any; }) => (
+        <ConnectionsComponent
+            {...props}
+            id={props.user.id}
+            theme={getProfileThemeProps(props).theme}
+        />
+    ),
+    { noop: true }
 );
 
 function ConnectionsComponent({ id, theme }: { id: string, theme: string; }) {
@@ -87,32 +83,19 @@ function ConnectionsComponent({ id, theme }: { id: string, theme: string; }) {
     if (!profile)
         return null;
 
-    const connections: Connection[] = profile.connectedAccounts;
+    const connections = profile.connectedAccounts;
     if (!connections?.length)
         return null;
 
     return (
-        <Section>
-            <Text
-                tag="h2"
-                variant="eyebrow"
-                style={{ color: "var(--header-primary)" }}
-            >
-                Connections
-            </Text>
-            <Flex style={{
-                marginTop: "8px",
-                gap: getSpacingPx(settings.store.iconSpacing),
-                flexWrap: "wrap"
-            }}>
-                {connections.map(connection => <CompactConnectionComponent connection={connection} theme={theme} />)}
-            </Flex>
-        </Section>
+        <Flex gap={getSpacingPx(settings.store.iconSpacing)} flexWrap="wrap">
+            {connections.map(connection => <CompactConnectionComponent connection={connection} theme={theme} key={connection.id} />)}
+        </Flex>
     );
 }
 
-function CompactConnectionComponent({ connection, theme }: { connection: Connection, theme: string; }) {
-    const platform = platforms.get(platformHooks.useLegacyPlatformType(connection.type));
+function CompactConnectionComponent({ connection, theme }: { connection: ConnectedAccount, theme: string; }) {
+    const platform = platforms.get(useLegacyPlatformType(connection.type));
     const url = platform.getPlatformUserUrl?.(connection);
 
     const img = (
@@ -132,9 +115,9 @@ function CompactConnectionComponent({ connection, theme }: { connection: Connect
         <Tooltip
             text={
                 <span className="vc-sc-tooltip">
-                    {connection.name}
+                    <span className="vc-sc-connection-name">{connection.name}</span>
                     {connection.verified && <VerifiedIcon />}
-                    <TooltipIcon height={16} width={16} />
+                    <TooltipIcon height={16} width={16} className="vc-sc-tooltip-icon" />
                 </span>
             }
             key={connection.id}
@@ -146,11 +129,11 @@ function CompactConnectionComponent({ connection, theme }: { connection: Connect
                         className="vc-user-connection"
                         href={url}
                         target="_blank"
+                        rel="noreferrer"
                         onClick={e => {
-                            if (Vencord.Plugins.isPluginEnabled("OpenInApp")) {
-                                const OpenInApp = Vencord.Plugins.plugins.OpenInApp as any as typeof import("../openInApp").default;
+                            if (isPluginEnabled(OpenInAppPlugin.name)) {
                                 // handleLink will .preventDefault() if applicable
-                                OpenInApp.handleLink(e.currentTarget, e);
+                                OpenInAppPlugin.handleLink(e.currentTarget, e);
                             }
                         }}
                     >
@@ -172,25 +155,20 @@ function CompactConnectionComponent({ connection, theme }: { connection: Connect
 export default definePlugin({
     name: "ShowConnections",
     description: "Show connected accounts in user popouts",
+    tags: ["Friends", "Appearance"],
     authors: [Devs.TheKodeToad],
+    settings,
+
     patches: [
         {
-            find: "{isUsingGuildBio:null!==(",
+            // Same find as ReviewDB
+            find: '"UserProfilePopout");',
             replacement: {
-                match: /,theme:\i\}\)(?=,.{0,150}setNote:)/,
-                replace: "$&,$self.profilePopoutComponent({ user: arguments[0].user, displayProfile: arguments[0].displayProfile })"
-            }
-        },
-        {
-            find: "\"Profile Panel: user cannot be undefined\"",
-            replacement: {
-                // createElement(Divider, {}), createElement(NoteComponent)
-                match: /\(0,\i\.jsx\)\(\i\.\i,\{\}\).{0,100}setNote:(?=.+?channelId:(\i).id)/,
-                replace: "$self.profilePanelComponent({ id: $1.recipients[0] }),$&"
+                match: /userId:\i\.id,guild:\i\}\)(?=])/,
+                replace: "$&,$self.profilePopoutComponent(arguments[0])"
             }
         }
     ],
-    settings,
+
     profilePopoutComponent,
-    profilePanelComponent
 });

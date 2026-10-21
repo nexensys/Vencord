@@ -22,9 +22,9 @@ export function promisifyRequest<T = undefined>(
     request: IDBRequest<T> | IDBTransaction,
 ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-        // @ts-ignore - file size hacks
+        // @ts-expect-error - file size hacks
         request.oncomplete = request.onsuccess = () => resolve(request.result);
-        // @ts-ignore - file size hacks
+        // @ts-expect-error - file size hacks
         request.onabort = request.onerror = () => reject(request.error);
     });
 }
@@ -49,7 +49,7 @@ let defaultGetStoreFunc: UseStore | undefined;
 
 function defaultGetStore() {
     if (!defaultGetStoreFunc) {
-        defaultGetStoreFunc = createStore("VencordData", "VencordStore");
+        defaultGetStoreFunc = createStore(!IS_REPORTER ? "VencordData" : "VencordDataReporter", "VencordStore");
     }
     return defaultGetStoreFunc;
 }

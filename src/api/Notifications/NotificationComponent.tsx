@@ -104,16 +104,14 @@ export default ErrorBoundary.wrap(function NotificationComponent({
                             </svg>
                         </button>
                     </div>
-                    <div>
-                        {richBody ?? <p className="vc-notification-p">{body}</p>}
-                    </div>
+                    {richBody ?? <p className="vc-notification-p">{body}</p>}
                 </div>
             </div>
             {image && <img className="vc-notification-img" src={image} alt="" />}
             {timeout !== 0 && !permanent && (
                 <div
                     className="vc-notification-progressbar"
-                    style={{ width: `${(1 - timeoutProgress) * 100}%`, backgroundColor: color || "var(--brand-experiment)" }}
+                    style={{ width: `${(1 - timeoutProgress) * 100}%`, backgroundColor: color || "var(--brand-500)" }}
                 />
             )}
         </button>

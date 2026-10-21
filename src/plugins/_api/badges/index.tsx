@@ -16,40 +16,37 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import "./fixBadgeOverflow.css";
+import "./fixDiscordBadgePadding.css";
 
-import { BadgePosition, BadgeUserArgs, ProfileBadge } from "@api/Badges";
-import DonateButton from "@components/DonateButton";
+import { _getBadges, BadgePosition, BadgeUserArgs, ProfileBadge } from "@api/Badges";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { Flex } from "@components/Flex";
 import { Heart } from "@components/Heart";
+import { CopyIcon, LinkIcon } from "@components/Icons";
+import DonateButton from "@components/settings/DonateButton";
+import { openContributorModal } from "@components/settings/tabs";
 import { Devs } from "@utils/constants";
+import { copyWithToast } from "@utils/discord";
+import { Logger } from "@utils/Logger";
 import { Margins } from "@utils/margins";
-import { isPluginDev } from "@utils/misc";
-import { closeModal, Modals, openModal } from "@utils/modal";
+import { shouldShowContributorBadge } from "@utils/misc";
 import definePlugin from "@utils/types";
-import { Forms, Toasts } from "@webpack/common";
+import { ContextMenuApi, Forms, Menu, Modal, openModal, showToast, UserStore } from "@webpack/common";
 
-const CONTRIBUTOR_BADGE = "https://vencord.dev/assets/favicon.png";
+const CONTRIBUTOR_BADGE = "https://cdn.discordapp.com/emojis/1562267648857997356.webp?size=240";
 
 const ContributorBadge: ProfileBadge = {
+    id: "vencord_contributor_badge",
     description: "Vencord Contributor",
-    image: CONTRIBUTOR_BADGE,
+    iconSrc: CONTRIBUTOR_BADGE,
     position: BadgePosition.START,
-    shouldShow: ({ user }) => isPluginDev(user.id),
-    onClick(_, { user }) {
-        // circular import shenanigans
-        const { openContributorModal } = require("@components/PluginSettings/ContributorModal") as typeof import("@components/PluginSettings/ContributorModal");
-        // setImmediate is needed to run on later tick to workaround limitation in proxyLazy
-        setImmediate(() => openContributorModal(user));
-    }
+    shouldShow: ({ userId }) => shouldShowContributorBadge(userId),
+    onClick: (_, { userId }) => openContributorModal(UserStore.getUser(userId))
 };
 
 let DonorBadges = {} as Record<string, Array<Record<"tooltip" | "badge", string>>>;
 
 async function loadBadges(noCache = false) {
-    DonorBadges = {};
-
     const init = {} as RequestInit;
     if (noCache)
         init.cache = "no-cache";
@@ -58,54 +55,108 @@ async function loadBadges(noCache = false) {
         .then(r => r.json());
 }
 
+let intervalId: any;
+
+function BadgeContextMenu({ badge }: { badge: Omit<ProfileBadge, "id"> & BadgeUserArgs; }) {
+    return (
+        <Menu.Menu
+            navId="vc-badge-context"
+            onClose={ContextMenuApi.closeContextMenu}
+            aria-label="Badge Options"
+        >
+            {badge.description && (
+                <Menu.MenuItem
+                    id="vc-badge-copy-name"
+                    label="Copy Badge Name"
+                    action={() => copyWithToast(badge.description!)}
+                    leadingAccessory={{ type: "icon", icon: CopyIcon }}
+                />
+            )}
+            {badge.iconSrc && (
+                <Menu.MenuItem
+                    id="vc-badge-copy-link"
+                    label="Copy Badge Image Link"
+                    action={() => copyWithToast(badge.iconSrc!)}
+                    leadingAccessory={{ type: "icon", icon: LinkIcon }}
+                />
+            )}
+        </Menu.Menu>
+    );
+}
+
 export default definePlugin({
     name: "BadgeAPI",
-    description: "API to add badges to users.",
+    description: "API to add badges to users",
     authors: [Devs.Megu, Devs.Ven, Devs.TheSun],
     required: true,
     patches: [
-        /* Patch the badge list component on user profiles */
         {
-            find: 'id:"premium",',
+            find: "#{intl::PROFILE_USER_BADGES}",
             replacement: [
                 {
-                    match: /&&(\i)\.push\(\{id:"premium".+?\}\);/,
-                    replace: "$&$1.unshift(...Vencord.Api.Badges._getBadges(arguments[0]));",
+                    match: /alt:" ","aria-hidden":!0,src:.{0,50}(\i).iconSrc/,
+                    replace: "...$1.props,$&"
                 },
+                // Path with 2026-04-badge-discovery OFF
                 {
-                    // alt: "", aria-hidden: false, src: originalSrc
-                    match: /alt:" ","aria-hidden":!0,src:(?=(\i)\.src)/,
-                    // ...badge.props, ..., src: badge.image ?? ...
-                    replace: "...$1.props,$& $1.image??"
+                    match: /(?<=forceOpen:.{0,40}?ariaHidden:!0,)children:(?=.{0,50}?(\i)\.id)/,
+                    replace: "children:$1.component?$self.renderBadgeComponent({...$1}):"
                 },
-                // replace their component with ours if applicable
+                // Path with 2026-04-badge-discovery ON
                 {
-                    match: /(?<=text:(\i)\.description,spacing:12,.{0,50})children:/,
-                    replace: "children:$1.component ? () => $self.renderBadgeComponent($1) :"
+                    match: /(?<=fallbackIconSrc:.{0,50}?)children:(?=.{0,50}?(\i)\.id)/,
+                    replace: "children:$1.component?$self.renderBadgeComponent({...$1}):"
                 },
-                // conditionally override their onClick with badge.onClick if it exists
+                // handle onClick and onContextMenu
                 {
                     match: /href:(\i)\.link/,
-                    replace: "...($1.onClick && { onClick: vcE => $1.onClick(vcE, arguments[0]) }),$&"
+                    replace: "...$self.getBadgeMouseEventHandlers($1),$&"
                 }
             ]
+        },
+        {
+            find: "getLegacyUsername(){",
+            replacement: {
+                match: /getBadges\(\)\{.{0,100}?return\[/,
+                replace: "$&...$self.getBadges(this),"
+            }
         }
     ],
+
+    // for access from the console or other plugins
+    get DonorBadges() {
+        return DonorBadges;
+    },
 
     toolboxActions: {
         async "Refetch Badges"() {
             await loadBadges(true);
-            Toasts.show({
-                id: Toasts.genId(),
-                message: "Successfully refetched badges!",
-                type: Toasts.Type.SUCCESS
-            });
+            showToast({ text: "Successfully refetched badges!", variant: "success" });
         }
     },
 
+    userProfileBadge: ContributorBadge,
+
     async start() {
-        Vencord.Api.Badges.addBadge(ContributorBadge);
         await loadBadges();
+
+        clearInterval(intervalId);
+        intervalId = setInterval(loadBadges, 1000 * 60 * 30); // 30 minutes
+    },
+
+    async stop() {
+        clearInterval(intervalId);
+    },
+
+    getBadges(profile: { userId: string; guildId: string; }) {
+        if (!profile) return [];
+
+        try {
+            return _getBadges(profile);
+        } catch (e) {
+            new Logger("BadgeAPI#getBadges").error(e);
+            return [];
+        }
     },
 
     renderBadgeComponent: ErrorBoundary.wrap((badge: ProfileBadge & BadgeUserArgs) => {
@@ -114,9 +165,23 @@ export default definePlugin({
     }, { noop: true }),
 
 
+    getBadgeMouseEventHandlers(badge: ProfileBadge & BadgeUserArgs) {
+        const handlers = {} as Record<string, (e: React.MouseEvent) => void>;
+
+        if (!badge) return handlers; // sanity check
+
+        const { onClick, onContextMenu } = badge;
+
+        if (onClick) handlers.onClick = e => onClick(e, badge);
+        if (onContextMenu) handlers.onContextMenu = e => onContextMenu(e, badge);
+
+        return handlers;
+    },
+
     getDonorBadges(userId: string) {
-        return DonorBadges[userId]?.map(badge => ({
-            image: badge.badge,
+        return DonorBadges[userId]?.map((badge, idx) => ({
+            id: `vencord_donor_badge_${idx}`,
+            iconSrc: badge.badge,
             description: badge.tooltip,
             position: BadgePosition.START,
             props: {
@@ -125,29 +190,34 @@ export default definePlugin({
                     transform: "scale(0.9)" // The image is a bit too big compared to default badges
                 }
             },
+            onContextMenu(event, badge) {
+                ContextMenuApi.openContextMenu(event, () => <BadgeContextMenu badge={badge} />);
+            },
             onClick() {
-                const modalKey = openModal(props => (
+                openModal(props => (
                     <ErrorBoundary noop onError={() => {
-                        closeModal(modalKey);
+                        props.onClose();
                         VencordNative.native.openExternal("https://github.com/sponsors/Vendicated");
                     }}>
-                        <Modals.ModalRoot {...props}>
-                            <Modals.ModalHeader>
-                                <Flex style={{ width: "100%", justifyContent: "center" }}>
-                                    <Forms.FormTitle
-                                        tag="h2"
-                                        style={{
-                                            width: "100%",
-                                            textAlign: "center",
-                                            margin: 0
-                                        }}
-                                    >
+                        <Modal
+                            {...props}
+                            title={
+                                <Forms.FormTitle
+                                    tag="h2"
+                                    style={{
+                                        width: "100%",
+                                        textAlign: "center",
+                                        margin: 0
+                                    }}
+                                >
+                                    <Flex justifyContent="center" alignItems="center" gap="0.5em">
                                         <Heart />
                                         Vencord Donor
-                                    </Forms.FormTitle>
-                                </Flex>
-                            </Modals.ModalHeader>
-                            <Modals.ModalContent>
+                                    </Flex>
+                                </Forms.FormTitle>
+                            }
+                        >
+                            <div>
                                 <Flex>
                                     <img
                                         role="presentation"
@@ -170,16 +240,16 @@ export default definePlugin({
                                         Please consider supporting the development of Vencord by becoming a donor. It would mean a lot!!
                                     </Forms.FormText>
                                 </div>
-                            </Modals.ModalContent>
-                            <Modals.ModalFooter>
-                                <Flex style={{ width: "100%", justifyContent: "center" }}>
+                            </div>
+                            <div>
+                                <Flex justifyContent="center" style={{ width: "100%" }}>
                                     <DonateButton />
                                 </Flex>
-                            </Modals.ModalFooter>
-                        </Modals.ModalRoot>
+                            </div>
+                        </Modal>
                     </ErrorBoundary>
                 ));
             },
-        }));
+        } satisfies ProfileBadge));
     }
 });

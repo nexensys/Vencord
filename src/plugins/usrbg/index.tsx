@@ -17,20 +17,17 @@
 */
 
 import { definePluginSettings } from "@api/Settings";
-import { enableStyle } from "@api/Styles";
-import { Link } from "@components/Link";
+import { LinkButton } from "@components/Button";
 import { Devs } from "@utils/constants";
 import definePlugin, { OptionType } from "@utils/types";
-
-import style from "./index.css?managed";
 
 const API_URL = "https://usrbg.is-hardly.online/users";
 
 interface UsrbgApiReturn {
-    endpoint: string
-    bucket: string
-    prefix: string
-    users: Record<string, string>
+    endpoint: string;
+    bucket: string;
+    prefix: string;
+    users: Record<string, string>;
 }
 
 const settings = definePluginSettings({
@@ -53,35 +50,35 @@ const settings = definePluginSettings({
 export default definePlugin({
     name: "USRBG",
     description: "Displays user banners from USRBG, allowing anyone to get a banner without Nitro",
+    tags: ["Appearance", "Customisation"],
     authors: [Devs.AutumnVN, Devs.katlyn, Devs.pylix, Devs.TheKodeToad],
     settings,
     patches: [
         {
-            find: ".NITRO_BANNER,",
-            replacement: [
-                {
-                    match: /(\i)\.premiumType/,
-                    replace: "$self.premiumHook($1)||$&"
-                },
-                {
-                    match: /(?<=function \i\((\i)\)\{)(?=var.{30,50},bannerSrc:)/,
-                    replace: "$1.bannerSrc=$self.useBannerHook($1);"
-                },
-                {
-                    match: /\?\(0,\i\.jsx\)\(\i,{type:\i,shown/,
-                    replace: "&&$self.shouldShowBadge(arguments[0])$&"
-                }
-            ]
+            find: ':"SHOULD_LOAD");',
+            replacement: {
+                match: /\i(?:\?)?.getPreviewBanner\(\i,\i,\i\)(?=.{0,100}"COMPLETE")/,
+                replace: "$self.patchBannerUrl(arguments[0])||$&"
+
+            }
         },
         {
             find: "\"data-selenium-video-tile\":",
             predicate: () => settings.store.voiceBackground,
             replacement: [
                 {
-                    match: /(?<=function\((\i),\i\)\{)(?=let.{20,40},style:)/,
-                    replace: "$1.style=$self.voiceBackgroundHook($1);"
+                    match: /(?<=function \i\((\i)\)\{)(?=let.{20,40},style:)/,
+                    replace: "$1.style=$self.getVoiceBackgroundStyles($1);"
                 }
             ]
+        },
+        {
+            find: ".VIDEO_TILE_BACKGROUND,primaryColor:",
+            predicate: () => settings.store.voiceBackground,
+            replacement: {
+                match: /backgroundColor:.{0,25},\{style:(?=\i\?)/,
+                replace: "$&$self.userHasBackground(arguments[0]?.userId)?null:",
+            }
         }
     ],
 
@@ -89,12 +86,14 @@ export default definePlugin({
 
     settingsAboutComponent: () => {
         return (
-            <Link href="https://github.com/AutumnVN/usrbg#how-to-request-your-own-usrbg-banner">CLICK HERE TO GET YOUR OWN BANNER</Link>
+            <LinkButton href="https://github.com/AutumnVN/usrbg#how-to-request-your-own-usrbg-banner" variant="primary">
+                Get your own USRBG banner
+            </LinkButton>
         );
     },
 
-    voiceBackgroundHook({ className, participantUserId }: any) {
-        if (className.includes("tile_")) {
+    getVoiceBackgroundStyles({ className, participantUserId }: any) {
+        if (className.includes("tile")) {
             if (this.userHasBackground(participantUserId)) {
                 return {
                     backgroundImage: `url(${this.getImageUrl(participantUserId)})`,
@@ -106,24 +105,16 @@ export default definePlugin({
         }
     },
 
-    useBannerHook({ displayProfile, user }: any) {
+    patchBannerUrl({ displayProfile }: any) {
         if (displayProfile?.banner && settings.store.nitroFirst) return;
-        if (this.userHasBackground(user.id)) return this.getImageUrl(user.id);
-    },
-
-    premiumHook({ userId }: any) {
-        if (this.userHasBackground(userId)) return 2;
-    },
-
-    shouldShowBadge({ displayProfile, user }: any) {
-        return displayProfile?.banner && (!this.userHasBackground(user.id) || settings.store.nitroFirst);
+        if (this.userHasBackground(displayProfile?.userId)) return this.getImageUrl(displayProfile?.userId);
     },
 
     userHasBackground(userId: string) {
         return !!this.data?.users[userId];
     },
 
-    getImageUrl(userId: string): string|null {
+    getImageUrl(userId: string): string | null {
         if (!this.userHasBackground(userId)) return null;
 
         // We can assert that data exists because userHasBackground returned true
@@ -132,8 +123,6 @@ export default definePlugin({
     },
 
     async start() {
-        enableStyle(style);
-
         const res = await fetch(API_URL);
         if (res.ok) {
             this.data = await res.json();

@@ -16,30 +16,27 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+import { DataStore } from "@api/index";
 import { showNotification } from "@api/Notifications";
 import { definePluginSettings } from "@api/Settings";
 import { Devs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
-import { closeAllModals } from "@utils/modal";
 import definePlugin, { OptionType } from "@utils/types";
 import { maybePromptToUpdate } from "@utils/updater";
 import { filters, findBulk, proxyLazyWebpack } from "@webpack";
-import { FluxDispatcher, NavigationRouter, SelectedChannelStore } from "@webpack/common";
+import { closeAllModals, DraftType, ExpressionPickerStore, FluxDispatcher, NavigationRouter, SelectedChannelStore } from "@webpack/common";
 
 const CrashHandlerLogger = new Logger("CrashHandler");
-const { ModalStack, DraftManager, DraftType, closeExpressionPicker } = proxyLazyWebpack(() => {
-    const modules = findBulk(
+
+const { ModalStack, DraftManager } = proxyLazyWebpack(() => {
+    const [ModalStack, DraftManager] = findBulk(
         filters.byProps("pushLazy", "popAll"),
         filters.byProps("clearDraft", "saveDraft"),
-        filters.byProps("DraftType"),
-        filters.byProps("closeExpressionPicker", "openExpressionPicker"),
     );
 
     return {
-        ModalStack: modules[0],
-        DraftManager: modules[1],
-        DraftType: modules[2]?.DraftType,
-        closeExpressionPicker: modules[3]?.closeExpressionPicker,
+        ModalStack,
+        DraftManager
     };
 });
 
@@ -64,13 +61,13 @@ export default definePlugin({
     name: "CrashHandler",
     description: "Utility plugin for handling and possibly recovering from crashes without a restart",
     authors: [Devs.Nuckyz],
+    tags: ["Utility", "Developers"],
     enabledByDefault: true,
-
     settings,
 
     patches: [
         {
-            find: ".Messages.ERRORS_UNEXPECTED_CRASH",
+            find: "#{intl::ERRORS_UNEXPECTED_CRASH}",
             replacement: {
                 match: /this\.setState\((.+?)\)/,
                 replace: "$self.handleCrash(this,$1);"
@@ -79,6 +76,15 @@ export default definePlugin({
     ],
 
     handleCrash(_this: any, errorState: any) {
+        DataStore.del("KeepCurrentChannel_previousData");
+
+        if (IS_DEV) {
+            try {
+                if (errorState?.info && "componentStack" in errorState.info) {
+                    console.error("Component Stack:", errorState.info.componentStack);
+                }
+            } catch { }
+        }
         _this.setState(errorState);
 
         // Already recovering, prevent error which happens more than once too fast to trigger another recover
@@ -104,7 +110,7 @@ export default definePlugin({
 
                 shouldAttemptRecover = false;
                 // This is enough to avoid a crash loop
-                setTimeout(() => shouldAttemptRecover = true, 500);
+                setTimeout(() => shouldAttemptRecover = true, 1000);
             } catch { }
 
             try {
@@ -137,13 +143,16 @@ export default definePlugin({
         try {
             const channelId = SelectedChannelStore.getChannelId();
 
-            DraftManager.clearDraft(channelId, DraftType.ChannelMessage);
-            DraftManager.clearDraft(channelId, DraftType.FirstThreadMessage);
+            for (const key in DraftType) {
+                if (!Number.isNaN(Number(key))) continue;
+
+                DraftManager.clearDraft(channelId, DraftType[key]);
+            }
         } catch (err) {
             CrashHandlerLogger.debug("Failed to clear drafts.", err);
         }
         try {
-            closeExpressionPicker();
+            ExpressionPickerStore.closeExpressionPicker();
         }
         catch (err) {
             CrashHandlerLogger.debug("Failed to close expression picker.", err);
@@ -173,14 +182,22 @@ export default definePlugin({
         } catch (err) {
             CrashHandlerLogger.debug("Failed to pop all layers.", err);
         }
+        try {
+            FluxDispatcher.dispatch({
+                type: "DEV_TOOLS_SETTINGS_UPDATE",
+                settings: { displayTools: false, lastOpenTabId: "analytics" }
+            });
+        } catch (err) {
+            CrashHandlerLogger.debug("Failed to close DevTools.", err);
+        }
+
         if (settings.store.attemptToNavigateToHome) {
             try {
-                NavigationRouter.transitionTo("/channels/@me");
+                NavigationRouter.transitionToGuild("@me");
             } catch (err) {
                 CrashHandlerLogger.debug("Failed to navigate to home", err);
             }
         }
-
 
         // Set isRecovering to false before setting the state to allow us to handle the next crash error correcty, in case it happens
         setImmediate(() => isRecovering = false);

@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { Settings } from "@api/Settings";
+import { definePluginSettings } from "@api/Settings";
 import { disableStyle, enableStyle } from "@api/Styles";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { Devs } from "@utils/constants";
@@ -25,6 +25,25 @@ import definePlugin, { OptionType } from "@utils/types";
 import hoverOnlyStyle from "./hoverOnly.css?managed";
 import { Player } from "./PlayerComponent";
 
+export const settings = definePluginSettings({
+    hoverControls: {
+        description: "Show controls on hover",
+        type: OptionType.BOOLEAN,
+        default: false,
+        onChange: v => toggleHoverControls(v)
+    },
+    useSpotifyUris: {
+        type: OptionType.BOOLEAN,
+        description: "Open Spotify URIs instead of Spotify URLs. Will only work if you have Spotify installed and might not work on all platforms",
+        default: false
+    },
+    previousButtonRestartsTrack: {
+        type: OptionType.BOOLEAN,
+        description: "Restart currently playing track when pressing the previous button if playtime is >3s",
+        default: true
+    }
+});
+
 function toggleHoverControls(value: boolean) {
     (value ? enableStyle : disableStyle)(hoverOnlyStyle);
 }
@@ -32,26 +51,15 @@ function toggleHoverControls(value: boolean) {
 export default definePlugin({
     name: "SpotifyControls",
     description: "Adds a Spotify player above the account panel",
-    authors: [Devs.Ven, Devs.afn, Devs.KraXen72, Devs.Av32000],
-    options: {
-        hoverControls: {
-            description: "Show controls on hover",
-            type: OptionType.BOOLEAN,
-            default: false,
-            onChange: v => toggleHoverControls(v)
-        },
-        useSpotifyUris: {
-            type: OptionType.BOOLEAN,
-            description: "Open Spotify URIs instead of Spotify URLs. Will only work if you have Spotify installed and might not work on all platforms",
-            default: false
-        }
-    },
+    tags: ["Media", "Activity"],
+    authors: [Devs.Ven, Devs.afn, Devs.KraXen72, Devs.Av32000, Devs.nin0dev],
+    settings,
     patches: [
         {
-            find: "showTaglessAccountPanel:",
+            find: "#{intl::USER_PROFILE_ACCOUNT_POPOUT_BUTTON_A11Y_LABEL}",
             replacement: {
                 // react.jsx)(AccountPanel, { ..., showTaglessAccountPanel: blah })
-                match: /(?<=\i\.jsxs?\)\()(\i),{(?=[^}]*?showTaglessAccountPanel:)/,
+                match: /(?<=\i\.jsxs?\)\()(\i),{(?=[^}]*?userTag:\i,occluded:)/,
                 // react.jsx(WrapperComponent, { VencordOriginal: AccountPanel, ...
                 replace: "$self.PanelWrapper,{VencordOriginal:$1,"
             }
@@ -61,7 +69,7 @@ export default definePlugin({
             replacement: [{
                 // Adds POST and a Marker to the SpotifyAPI (so we can easily find it)
                 match: /get:(\i)\.bind\(null,(\i\.\i)\.get\)/,
-                replace: "post:$1.bind(null,$2.post),$&"
+                replace: "post:$1.bind(null,$2.post),vcSpotifyMarker:1,$&"
             },
             {
                 // Spotify Connect API returns status 202 instead of 204 when skipping tracks.
@@ -70,17 +78,23 @@ export default definePlugin({
                 replace: "false",
             }]
         },
-        // Discord doesn't give you the repeat kind, only a boolean
         {
             find: 'repeat:"off"!==',
-            replacement: {
-                match: /repeat:"off"!==(.{1,3}),/,
-                replace: "actual_repeat:$1,$&"
-            }
-        }
+            replacement: [
+                {
+                    // Discord doesn't give you shuffle state and the repeat kind, only a boolean
+                    match: /repeat:"off"!==(\i),/,
+                    replace: "shuffle:arguments[2]?.shuffle_state??false,actual_repeat:$1,$&"
+                },
+                {
+                    match: /(?<=artists.filter\(\i=>).{0,10}\i\.id\)&&/,
+                    replace: ""
+                }
+            ]
+        },
     ],
 
-    start: () => toggleHoverControls(Settings.plugins.SpotifyControls.hoverControls),
+    start: () => toggleHoverControls(settings.store.hoverControls),
 
     PanelWrapper({ VencordOriginal, ...props }) {
         return (

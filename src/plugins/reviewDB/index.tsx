@@ -20,28 +20,38 @@ import "./style.css";
 
 import { NavContextMenuPatchCallback } from "@api/ContextMenu";
 import ErrorBoundary from "@components/ErrorBoundary";
-import ExpandableHeader from "@components/ExpandableHeader";
 import { OpenExternalIcon } from "@components/Icons";
+import { Paragraph } from "@components/Paragraph";
+import { Span } from "@components/Span";
 import { Devs } from "@utils/constants";
+import { classes } from "@utils/misc";
+import { useAwaiter } from "@utils/react";
 import definePlugin from "@utils/types";
-import { Alerts, Menu, Parser, useState } from "@webpack/common";
-import { Guild, User } from "discord-types/general";
+import { Guild, User } from "@vencord/discord-types";
+import { findCssClassesLazy } from "@webpack";
+import { Clickable, ConfirmModal, IconUtils, Menu, openModal, Parser } from "@webpack/common";
 
 import { Auth, initAuth, updateAuth } from "./auth";
 import { openReviewsModal } from "./components/ReviewModal";
-import ReviewsView from "./components/ReviewsView";
-import { NotificationType } from "./entities";
-import { getCurrentUserInfo, readNotification } from "./reviewDbApi";
+import { NotificationType, ReviewType } from "./entities";
+import { getCurrentUserInfo, getReviews, readNotification } from "./reviewDbApi";
 import { settings } from "./settings";
-import { showToast } from "./utils";
+import { cl, showToast } from "./utils";
+
+const DMSideBarClasses = findCssClassesLazy("widgetPreviews");
+const ProfileCardClasses = findCssClassesLazy("cardsList", "firstCardContainer", "card", "container");
+const ProfileCardContainerClasses = findCssClassesLazy("innerContainer", "icons", "icon", "displayCount", "displayCountText", "displayCountTextColor", "breadcrumb");
+const ProfileCardOverlayClasses = findCssClassesLazy("overlay", "isPrivate", "outer");
 
 const guildPopoutPatch: NavContextMenuPatchCallback = (children, { guild }: { guild: Guild, onClose(): void; }) => {
+    if (!guild) return;
     children.push(
         <Menu.MenuItem
             label="View Reviews"
             id="vc-rdb-server-reviews"
             icon={OpenExternalIcon}
-            action={() => openReviewsModal(guild.id, guild.name)}
+            leadingAccessory={{ type: "icon", icon: OpenExternalIcon }}
+            action={() => openReviewsModal(guild.id, guild.name, ReviewType.Server)}
         />
     );
 };
@@ -53,7 +63,8 @@ const userContextPatch: NavContextMenuPatchCallback = (children, { user }: { use
             label="View Reviews"
             id="vc-rdb-user-reviews"
             icon={OpenExternalIcon}
-            action={() => openReviewsModal(user.id, user.username)}
+            leadingAccessory={{ type: "icon", icon: OpenExternalIcon }}
+            action={() => openReviewsModal(user.id, user.username, ReviewType.User)}
         />
     );
 };
@@ -61,6 +72,7 @@ const userContextPatch: NavContextMenuPatchCallback = (children, { user }: { use
 export default definePlugin({
     name: "ReviewDB",
     description: "Review other users (Adds a new settings to profiles)",
+    tags: ["Friends", "Servers"],
     authors: [Devs.mantikafasi, Devs.Ven],
 
     settings,
@@ -68,15 +80,26 @@ export default definePlugin({
         "guild-header-popout": guildPopoutPatch,
         "guild-context": guildPopoutPatch,
         "user-context": userContextPatch,
-        "user-profile-actions": userContextPatch
+        "user-profile-actions": userContextPatch,
+        "user-profile-overflow-menu": userContextPatch
     },
 
     patches: [
         {
-            find: "showBorder:null",
+            // DM profile sidebar
+            find: ".SIDEBAR,disableToolbar:",
             replacement: {
-                match: /user:(\i),setNote:\i,canDM.+?\}\)/,
-                replace: "$&,$self.getReviewsComponent($1)"
+                match: /user:(\i),widgets:.{0,100}?\}\),(?=.{0,100}unownedWishlistItems:\i,wishlistId:\i)/,
+                replace: "$&$self.renderProfileComponent({user:$1,isSideBar:true}),"
+            }
+        },
+        {
+            // User popout
+            // Same find as ShowConnections
+            find: '"UserProfilePopout");',
+            replacement: {
+                match: /user:(\i),widgets:.{0,100}?\}\),/,
+                replace: "$&$self.renderProfileComponent({user:$1}),"
             }
         }
     ],
@@ -94,69 +117,110 @@ export default definePlugin({
         setTimeout(async () => {
             if (!Auth.token) return;
 
-            const user = await getCurrentUserInfo(Auth.token);
-            updateAuth({ user });
+            const user = await getCurrentUserInfo();
+            if (user) {
+                updateAuth({ user });
 
-            if (notifyReviews) {
-                if (lastReviewId && lastReviewId < user.lastReviewID) {
-                    s.lastReviewId = user.lastReviewID;
-                    if (user.lastReviewID !== 0)
-                        showToast("You have new reviews on your profile!");
+                if (notifyReviews) {
+                    if (lastReviewId && lastReviewId < user.lastReviewID) {
+                        s.lastReviewId = user.lastReviewID;
+                        if (user.lastReviewID !== 0)
+                            showToast({ text: "You have new reviews on your profile!" });
+                    }
                 }
-            }
 
-            if (user.notification) {
-                const props = user.notification.type === NotificationType.Ban ? {
-                    cancelText: "Appeal",
-                    confirmText: "Ok",
-                    onCancel: async () =>
-                        VencordNative.native.openExternal(
-                            "https://reviewdb.mantikafasi.dev/api/redirect?"
-                            + new URLSearchParams({
-                                token: Auth.token!,
-                                page: "dashboard/appeal"
-                            })
-                        )
-                } : {};
+                const { notification } = user;
+                if (notification) {
+                    const props = notification.type === NotificationType.Ban ? {
+                        cancelText: "Appeal",
+                        confirmText: "Ok",
+                        onCancel: async () =>
+                            VencordNative.native.openExternal(
+                                "https://reviewdb.mantikafasi.dev/api/redirect?"
+                                + new URLSearchParams({
+                                    token: Auth.token!,
+                                    page: "dashboard/appeal"
+                                })
+                            )
+                    } : {};
 
-                Alerts.show({
-                    title: user.notification.title,
-                    body: (
-                        Parser.parse(
-                            user.notification.content,
-                            false
-                        )
-                    ),
-                    ...props
-                });
+                    openModal(modalProps => (
+                        <ConfirmModal
+                            {...modalProps}
+                            title={notification.title}
+                            confirmText={props.confirmText ?? "OK"}
+                            cancelText={props.cancelText}
+                            variant="primary"
+                            onCancel={props.onCancel}
+                        >
+                            {Parser.parse(
+                                notification.content,
+                                false
+                            )}
+                        </ConfirmModal>
+                    ));
 
-                readNotification(user.notification.id);
+                    readNotification(notification.id);
+                }
             }
         }, 4000);
     },
 
-    getReviewsComponent: ErrorBoundary.wrap((user: User) => {
-        const [reviewCount, setReviewCount] = useState<number>();
+    renderProfileComponent: ErrorBoundary.wrap(({ user, isSideBar = false }: { user: User; isSideBar?: boolean; }) => {
+        const [reviewData] = useAwaiter(() => getReviews(user.id, { limit: 4 }), { deps: [user.id], fallbackValue: null });
 
-        return (
-            <ExpandableHeader
-                headerText="User Reviews"
-                onMoreClick={() => openReviewsModal(user.id, user.username)}
-                moreTooltipText={
-                    reviewCount && reviewCount > 50
-                        ? `View all ${reviewCount} reviews`
-                        : "Open Review Modal"
-                }
-                onDropDownClick={state => settings.store.reviewsDropdownState = !state}
-                defaultState={settings.store.reviewsDropdownState}
-            >
-                <ReviewsView
-                    discordId={user.id}
-                    name={user.username}
-                    onFetchReviews={r => setReviewCount(r.reviewCount)}
-                    showInput
-                />
-            </ExpandableHeader>
+        // Discord are masters at using a crap ton of html elements and css classes to create a simple ui that could have
+        // been made with less than half of the number of elements, so we have to do this insanity to replicate their ui
+        const reviewsSection = (
+            <section className={ProfileCardClasses.container}>
+                <ul className={ProfileCardClasses.cardsList} tabIndex={-1}>
+                    <li className={ProfileCardClasses.firstCardContainer}>
+                        <Clickable
+                            className={classes(ProfileCardContainerClasses.breadcrumb, reviewData?.hasOptedOut && cl("profile-popout-disabled"))}
+                            onClick={() => !reviewData?.hasOptedOut && openReviewsModal(user.id, user.username, ReviewType.User)}
+                        >
+                            <div className={classes(ProfileCardOverlayClasses.overlay, ProfileCardContainerClasses.innerContainer, ProfileCardClasses.card)}>
+                                <Paragraph size={isSideBar ? "sm" : "xs"} weight="medium">User Reviews</Paragraph>
+                                {!!reviewData?.reviewCount
+                                    ? (
+                                        <div className={ProfileCardContainerClasses.icons}>
+                                            {reviewData.reviews
+                                                .filter(review => review.id !== 0)
+                                                .slice(0, 4)
+                                                .map((review, idx) => {
+                                                    const showCount = idx === 3 && reviewData.reviewCount > 4;
+
+                                                    return (
+                                                        <div className={ProfileCardContainerClasses.icon} key={review.id}>
+                                                            <img
+                                                                src={review.sender.profilePhoto}
+                                                                alt={review.sender.username}
+                                                                className={showCount ? ProfileCardContainerClasses.displayCount : undefined}
+                                                                onError={e => e.currentTarget.src = IconUtils.getDefaultAvatarURL(review.sender.discordID)}
+                                                            />
+                                                            {showCount && (
+                                                                <div className={ProfileCardContainerClasses.displayCountText}>
+                                                                    <Span className={ProfileCardContainerClasses.displayCountTextColor} size="xs" weight="medium" defaultColor={false}>
+                                                                        +{reviewData.reviewCount - 3}
+                                                                    </Span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                        </div>
+                                    )
+                                    : <Paragraph size={isSideBar ? "sm" : "xs"}>{reviewData?.hasOptedOut ? "User opted out" : "No reviews yet"}</Paragraph>
+                                }
+                            </div>
+                        </Clickable>
+                    </li>
+                </ul>
+            </section>
         );
-    }, { message: "Failed to render Reviews" })
+
+        return isSideBar
+            ? <div className={DMSideBarClasses.widgetPreviews}>{reviewsSection}</div>
+            : reviewsSection;
+    }, { noop: true })
 });

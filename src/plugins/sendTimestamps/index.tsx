@@ -18,16 +18,15 @@
 
 import "./styles.css";
 
-import { addChatBarButton, ChatBarButton, removeChatBarButton } from "@api/ChatButtons";
-import { addPreSendListener, removePreSendListener } from "@api/MessageEvents";
+import { ChatBarButton, ChatBarButtonFactory } from "@api/ChatButtons";
 import { definePluginSettings } from "@api/Settings";
-import { classNameFactory } from "@api/Styles";
 import { Devs } from "@utils/constants";
+import { classNameFactory } from "@utils/css";
 import { getTheme, insertTextIntoChatInputBox, Theme } from "@utils/discord";
 import { Margins } from "@utils/margins";
-import { closeModal, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModal } from "@utils/modal";
-import definePlugin, { OptionType } from "@utils/types";
-import { Button, Forms, Parser, Select, useMemo, useState } from "@webpack/common";
+import definePlugin, { IconComponent, OptionType } from "@utils/types";
+import { RenderModalProps } from "@vencord/discord-types";
+import { Forms, Modal,openModal, Parser, Select, useMemo, useState } from "@webpack/common";
 
 const settings = definePluginSettings({
     replaceMessageContents: {
@@ -49,12 +48,12 @@ function parseTime(time: string) {
     return `<t:${Math.round(ms)}:t>`;
 }
 
-const Formats = ["", "t", "T", "d", "D", "f", "F", "R"] as const;
+const Formats = ["", "t", "T", "d", "D", "f", "F", "s", "S", "R"] as const;
 type Format = typeof Formats[number];
 
 const cl = classNameFactory("vc-st-");
 
-function PickerModal({ rootProps, close }: { rootProps: ModalProps, close(): void; }) {
+function PickerModal(props: RenderModalProps) {
     const [value, setValue] = useState<string>();
     const [format, setFormat] = useState<Format>("");
     const time = Math.round((new Date(value!).getTime() || Date.now()) / 1000);
@@ -67,26 +66,30 @@ function PickerModal({ rootProps, close }: { rootProps: ModalProps, close(): voi
     }, [time, format]);
 
     return (
-        <ModalRoot {...rootProps}>
-            <ModalHeader className={cl("modal-header")}>
-                <Forms.FormTitle tag="h2">
-                    Timestamp Picker
-                </Forms.FormTitle>
+        <Modal
+            {...props}
+            title="Timestamp Picker"
+            actions={[{
+                text: "Insert",
+                variant: "primary",
+                onClick() {
+                    insertTextIntoChatInputBox(formatted + " ");
+                    props.onClose();
+                }
+            }]}
+        >
+            <input
+                className={cl("date-picker")}
+                type="datetime-local"
+                value={value}
+                onChange={e => setValue(e.currentTarget.value)}
+                style={{
+                    colorScheme: getTheme() === Theme.Light ? "light" : "dark",
+                }}
+            />
 
-                <ModalCloseButton onClick={close} />
-            </ModalHeader>
-
-            <ModalContent className={cl("modal-content")}>
-                <input
-                    type="datetime-local"
-                    value={value}
-                    onChange={e => setValue(e.currentTarget.value)}
-                    style={{
-                        colorScheme: getTheme() === Theme.Light ? "light" : "dark",
-                    }}
-                />
-
-                <Forms.FormTitle>Timestamp Format</Forms.FormTitle>
+            <Forms.FormTitle>Timestamp Format</Forms.FormTitle>
+            <div className={cl("format-select")}>
                 <Select
                     options={
                         Formats.map(m => ({
@@ -104,54 +107,45 @@ function PickerModal({ rootProps, close }: { rootProps: ModalProps, close(): voi
                     )}
                     renderOptionValue={() => rendered}
                 />
+            </div>
 
-                <Forms.FormTitle className={Margins.bottom8}>Preview</Forms.FormTitle>
-                <Forms.FormText className={cl("preview-text")}>
-                    {rendered} ({formatted})
-                </Forms.FormText>
-            </ModalContent>
-
-            <ModalFooter>
-                <Button
-                    onClick={() => {
-                        insertTextIntoChatInputBox(formatted + " ");
-                        close();
-                    }}
-                >Insert</Button>
-            </ModalFooter>
-        </ModalRoot>
+            <Forms.FormTitle className={Margins.bottom8}>Preview</Forms.FormTitle>
+            <Forms.FormText className={cl("preview-text")}>
+                {rendered} ({formatted})
+            </Forms.FormText>
+        </Modal>
     );
 }
 
-const ChatBarIcon: ChatBarButton = ({ isMainChat }) => {
-    if (!isMainChat) return null;
+const SendTimestampIcon: IconComponent = ({ height = 20, width = 20, className }) => {
+    return (
+        <svg
+            aria-hidden="true"
+            role="img"
+            width={width}
+            height={height}
+            className={className}
+            viewBox="0 0 24 24"
+            style={{ scale: "1.2" }}
+        >
+            <g fill="none" fillRule="evenodd">
+                <path fill="currentColor" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7v-5z" />
+                <rect width="24" height="24" />
+            </g>
+        </svg>
+    );
+};
+
+const SendTimestampButton: ChatBarButtonFactory = ({ isAnyChat }) => {
+    if (!isAnyChat) return null;
 
     return (
         <ChatBarButton
             tooltip="Insert Timestamp"
-            onClick={() => {
-                const key = openModal(props => (
-                    <PickerModal
-                        rootProps={props}
-                        close={() => closeModal(key)}
-                    />
-                ));
-            }}
+            onClick={() => openModal(props => <PickerModal {...props} />)}
             buttonProps={{ "aria-haspopup": "dialog" }}
         >
-            <svg
-                aria-hidden="true"
-                role="img"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                style={{ scale: "1.2" }}
-            >
-                <g fill="none" fill-rule="evenodd">
-                    <path fill="currentColor" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7v-5z" />
-                    <rect width="24" height="24" />
-                </g>
-            </svg>
+            <SendTimestampIcon />
         </ChatBarButton>
     );
 };
@@ -159,23 +153,19 @@ const ChatBarIcon: ChatBarButton = ({ isMainChat }) => {
 export default definePlugin({
     name: "SendTimestamps",
     description: "Send timestamps easily via chat box button & text shortcuts. Read the extended description!",
+    tags: ["Chat", "Commands"],
     authors: [Devs.Ven, Devs.Tyler, Devs.Grzesiek11],
-    dependencies: ["MessageEventsAPI", "ChatInputButtonAPI"],
-
     settings,
 
-    start() {
-        addChatBarButton("SendTimestamps", ChatBarIcon);
-        this.listener = addPreSendListener((_, msg) => {
-            if (settings.store.replaceMessageContents) {
-                msg.content = msg.content.replace(/`\d{1,2}:\d{2} ?(?:AM|PM)?`/gi, parseTime);
-            }
-        });
+    chatBarButton: {
+        icon: SendTimestampIcon,
+        render: SendTimestampButton
     },
 
-    stop() {
-        removeChatBarButton("SendTimestamps");
-        removePreSendListener(this.listener);
+    onBeforeMessageSend(_, msg) {
+        if (settings.store.replaceMessageContents) {
+            msg.content = msg.content.replace(/`\d{1,2}:\d{2} ?(?:AM|PM)?`/gi, parseTime);
+        }
     },
 
     settingsAboutComponent() {
@@ -191,7 +181,7 @@ export default definePlugin({
         return (
             <>
                 <Forms.FormText>
-                    To quickly send send time only timestamps, include timestamps formatted as `HH:MM` (including the backticks!) in your message
+                    To quickly send time only timestamps, include timestamps formatted as `HH:MM` (including the backticks!) in your message
                 </Forms.FormText>
                 <Forms.FormText>
                     See below for examples.

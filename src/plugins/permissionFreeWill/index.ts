@@ -6,6 +6,7 @@
 
 import { definePluginSettings } from "@api/Settings";
 import { Devs } from "@utils/constants";
+import { canonicalizeMatch } from "@utils/patches";
 import definePlugin, { OptionType } from "@utils/types";
 
 const settings = definePluginSettings({
@@ -26,12 +27,13 @@ const settings = definePluginSettings({
 export default definePlugin({
     name: "PermissionFreeWill",
     description: "Disables the client-side restrictions for channel permission management.",
+    tags: ["Servers", "Roles"],
     authors: [Devs.lewisakura],
 
     patches: [
         // Permission lockout, just set the check to true
         {
-            find: ".showPermissionLockoutModal(",
+            find: "#{intl::STAGE_CHANNEL_CANNOT_OVERWRITE_PERMISSION}",
             replacement: [
                 {
                     match: /case"DENY":.{0,50}if\((?=\i\.\i\.can)/,
@@ -42,12 +44,12 @@ export default definePlugin({
         },
         // Onboarding, same thing but we need to prevent the check
         {
-            find: ".ONBOARDING_CHANNEL_THRESHOLD_WARNING",
+            find: "#{intl::ONBOARDING_CHANNEL_THRESHOLD_WARNING}",
             replacement: [
                 {
-                    // are we java yet?
-                    match: /(?<=(?:isDefaultChannelThresholdMetAfterDelete|checkDefaultChannelThresholdMetAfterChannelPermissionDeny):function\(\)\{)return \i(?=\})/g,
-                    replace: "return () => true"
+                    // replace export getters with functions that always resolve to true
+                    match: /{(?:\i:\(\)=>\i,?){2}}/,
+                    replace: m => m.replaceAll(canonicalizeMatch(/\(\)=>\i/g), "()=>()=>Promise.resolve(true)")
                 }
             ],
             predicate: () => settings.store.onboarding

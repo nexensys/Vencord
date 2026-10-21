@@ -22,10 +22,10 @@ export const settings = definePluginSettings({
     },
 
     superReactionPlayingLimit: {
-        description: "Max Super Reactions to play at once",
+        description: "Max Super Reactions to play at once. 0 to disable playing Super Reactions",
         type: OptionType.SLIDER,
         default: 20,
-        markers: [5, 10, 20, 40, 60, 80, 100],
+        markers: [0, 5, 10, 20, 40, 60, 80, 100],
         stickToMarkers: true,
     },
 }, {
@@ -37,20 +37,24 @@ export const settings = definePluginSettings({
 export default definePlugin({
     name: "SuperReactionTweaks",
     description: "Customize the limit of Super Reactions playing at once, and super react by default",
+    tags: ["Reactions", "Emotes"],
     authors: [Devs.FieryFlames, Devs.ant0n],
     patches: [
         {
             find: ",BURST_REACTION_EFFECT_PLAY",
-            replacement: {
-                match: /(?<=BURST_REACTION_EFFECT_PLAY:\i=>{.{50,100})(\i\(\i,\i\))>=\d+/,
-                replace: "!$self.shouldPlayBurstReaction($1)"
-            }
+            replacement: [
+                {
+                    // if (inlinedCalculatePlayingCount(a,b) >= limit) return;
+                    match: /(BURST_REACTION_EFFECT_PLAY:(?:\i=>|function\(\i\)){.+?if\()(\(?(?:function)?\(\i,\i\)(?:=>)?{.+?\(\i,\i\))>=5+?(?=\))/,
+                    replace: (_, rest, playingCount) => `${rest}!$self.shouldPlayBurstReaction(${playingCount})`
+                }
+            ]
         },
         {
-            find: ".trackEmojiSearchEmpty,200",
+            find: ".EMOJI_PICKER_CONSTANTS_EMOJI_CONTAINER_PADDING_HORIZONTAL)",
             replacement: {
-                match: /(\.trackEmojiSearchEmpty,200(?=.+?isBurstReaction:(\i).+?(\i===\i\.EmojiIntention.REACTION)).+?\[\2,\i\]=\i\.useState\().+?\)/,
-                replace: (_, rest, isBurstReactionVariable, isReactionIntention) => `${rest}$self.shouldSuperReactByDefault&&${isReactionIntention})`
+                match: /(openPopoutType:void 0(?=.+?isBurstReaction:(\i).+?\.intention===(\i\.\i\.REACTION)).+?\[\2,\i\]=\i\.useState\()!1\)(?<=pickerIntention:(\i).+?)/,
+                replace: (_, rest, _isBurstReactionVariable, REACTION_INTENTION, pickerIntention) => `${rest}$self.shouldSuperReactByDefault&&${pickerIntention}===${REACTION_INTENTION})`
             }
         }
     ],
@@ -58,7 +62,7 @@ export default definePlugin({
 
     shouldPlayBurstReaction(playingCount: number) {
         if (settings.store.unlimitedSuperReactionPlaying) return true;
-        if (playingCount <= settings.store.superReactionPlayingLimit) return true;
+        if (settings.store.superReactionPlayingLimit > playingCount) return true;
         return false;
     },
 

@@ -16,13 +16,24 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { DataStore, Notices } from "@api/index";
+import * as DataStore from "@api/DataStore";
+import { popNotice, showNotice } from "@api/Notices";
 import { showNotification } from "@api/Notifications";
 import { getUniqueUsername, openUserProfile } from "@utils/discord";
+import { FluxStore } from "@vencord/discord-types";
+import { ChannelType, RelationshipType } from "@vencord/discord-types/enums";
+import { findStoreLazy } from "@webpack";
 import { ChannelStore, GuildMemberStore, GuildStore, RelationshipStore, UserStore, UserUtils } from "@webpack/common";
 
 import settings from "./settings";
-import { ChannelType, RelationshipType, SimpleGroupChannel, SimpleGuild } from "./types";
+import { SimpleGroupChannel, SimpleGuild } from "./types";
+
+export const GuildAvailabilityStore = findStoreLazy("GuildAvailabilityStore") as FluxStore & {
+    totalGuilds: number;
+    totalUnavailableGuilds: number;
+    unavailableGuilds: string[];
+    isUnavailable(guildId: string): boolean;
+};
 
 const guilds = new Map<string, SimpleGuild>();
 const groups = new Map<string, SimpleGroupChannel>();
@@ -41,6 +52,8 @@ async function runMigrations() {
 
 export async function syncAndRunChecks() {
     await runMigrations();
+    if (UserStore.getCurrentUser() == null) return;
+
     const [oldGuilds, oldGroups, oldFriends] = await DataStore.getMany([
         guildsKey(),
         groupsKey(),
@@ -59,7 +72,7 @@ export async function syncAndRunChecks() {
 
         if (settings.store.servers && oldGuilds?.size) {
             for (const [id, guild] of oldGuilds) {
-                if (!guilds.has(id))
+                if (!guilds.has(id) && !GuildAvailabilityStore.isUnavailable(id))
                     notify(`You are no longer in the server ${guild.name}.`, guild.iconURL);
             }
         }
@@ -99,7 +112,7 @@ export async function syncAndRunChecks() {
 
 export function notify(text: string, icon?: string, onClick?: () => void) {
     if (settings.store.notices)
-        Notices.showNotice(text, "OK", () => Notices.popNotice());
+        showNotice(text, "OK", () => popNotice());
 
     showNotification({
         title: "Relationship Notifier",
@@ -161,9 +174,9 @@ export async function syncFriends() {
     friends.friends = [];
     friends.requests = [];
 
-    const relationShips = RelationshipStore.getRelationships();
-    for (const id in relationShips) {
-        switch (relationShips[id]) {
+    const relationShips = RelationshipStore.getMutableRelationships();
+    for (const [id, type] of relationShips) {
+        switch (type) {
             case RelationshipType.FRIEND:
                 friends.friends.push(id);
                 break;

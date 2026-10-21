@@ -16,23 +16,22 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+import { Auth, authorize } from "@plugins/reviewDB/auth";
+import { Review, ReviewType } from "@plugins/reviewDB/entities";
+import { addReview, getReviews, REVIEWS_PER_PAGE, UserReviewsData } from "@plugins/reviewDB/reviewDbApi";
+import { settings } from "@plugins/reviewDB/settings";
+import { cl, showToast } from "@plugins/reviewDB/utils";
 import { useAwaiter, useForceUpdater } from "@utils/react";
-import { findByPropsLazy, findComponentByCodeLazy } from "@webpack";
+import { findByCodeLazy, findByPropsLazy, findComponentByCodeLazy } from "@webpack";
 import { Forms, React, RelationshipStore, useRef, UserStore } from "@webpack/common";
 
-import { Auth, authorize } from "../auth";
-import { Review } from "../entities";
-import { addReview, getReviews, Response, REVIEWS_PER_PAGE } from "../reviewDbApi";
-import { settings } from "../settings";
-import { cl, showToast } from "../utils";
 import ReviewComponent from "./ReviewComponent";
 
-
-const { Editor, Transforms } = findByPropsLazy("Editor", "Transforms");
-const { ChatInputTypes } = findByPropsLazy("ChatInputTypes");
-
-const InputComponent = findComponentByCodeLazy("default.CHANNEL_TEXT_AREA", "input");
-const { createChannelRecordFromServer } = findByPropsLazy("createChannelRecordFromServer");
+const Transforms = findByPropsLazy("insertNodes", "textToText");
+const Editor = findByPropsLazy("start", "end", "toSlateRange");
+const ChatInputTypes = findByPropsLazy("FORM", "USER_PROFILE");
+const InputComponent = findComponentByCodeLazy("editorClassName", "CHANNEL_TEXT_AREA");
+const createChannelRecordFromServer = findByCodeLazy(".GUILD_TEXT]", "fromServer)");
 
 interface UserProps {
     discordId: string;
@@ -40,12 +39,13 @@ interface UserProps {
 }
 
 interface Props extends UserProps {
-    onFetchReviews(data: Response): void;
+    onFetchReviews(data: UserReviewsData): void;
     refetchSignal?: unknown;
     showInput?: boolean;
     page?: number;
     scrollToTop?(): void;
     hideOwnReview?: boolean;
+    type: ReviewType;
 }
 
 export default function ReviewsView({
@@ -57,16 +57,19 @@ export default function ReviewsView({
     page = 1,
     showInput = false,
     hideOwnReview = false,
+    type,
 }: Props) {
     const [signal, refetch] = useForceUpdater(true);
 
-    const [reviewData] = useAwaiter(() => getReviews(discordId, (page - 1) * REVIEWS_PER_PAGE), {
+    const [reviewData] = useAwaiter(() => getReviews(discordId, { offset: (page - 1) * REVIEWS_PER_PAGE, limit: REVIEWS_PER_PAGE, fetchVotes: true }), {
         fallbackValue: null,
         deps: [refetchSignal, signal, page],
         onSuccess: data => {
-            if (settings.store.hideBlockedUsers)
-                data!.reviews = data!.reviews?.filter(r => !RelationshipStore.isBlocked(r.sender.discordID));
+            if (settings.store.hideBlockedUsers) data!.reviews = data!.reviews?.filter(r => !RelationshipStore.isBlocked(r.sender.discordID));
+            const systemReviews = data!.reviews.filter(r => r.type === ReviewType.System);
+            const normalReviews = data!.reviews.filter(r => r.type !== ReviewType.System);
 
+            data!.reviews = [...systemReviews, ...normalReviews];
             scrollToTop?.();
             onFetchReviews(data!);
         }
@@ -81,6 +84,7 @@ export default function ReviewsView({
                 reviews={reviewData!.reviews}
                 hideOwnReview={hideOwnReview}
                 profileId={discordId}
+                type={type}
             />
 
             {showInput && (
@@ -95,7 +99,7 @@ export default function ReviewsView({
     );
 }
 
-function ReviewList({ refetch, reviews, hideOwnReview, profileId }: { refetch(): void; reviews: Review[]; hideOwnReview: boolean; profileId: string; }) {
+function ReviewList({ refetch, reviews, hideOwnReview, profileId, type }: { refetch(): void; reviews: Review[]; hideOwnReview: boolean; profileId: string; type: ReviewType; }) {
     const myId = UserStore.getCurrentUser().id;
 
     return (
@@ -112,7 +116,7 @@ function ReviewList({ refetch, reviews, hideOwnReview, profileId }: { refetch():
 
             {reviews?.length === 0 && (
                 <Forms.FormText className={cl("placeholder")}>
-                    Looks like nobody reviewed this user yet. You could be the first!
+                    Looks like nobody reviewed this {type === ReviewType.User ? "user" : "server"} yet. You could be the first!
                 </Forms.FormText>
             )}
         </div>
@@ -120,10 +124,12 @@ function ReviewList({ refetch, reviews, hideOwnReview, profileId }: { refetch():
 }
 
 
-export function ReviewsInputComponent({ discordId, isAuthor, refetch, name }: { discordId: string, name: string; isAuthor: boolean; refetch(): void; }) {
+export function ReviewsInputComponent(
+    { discordId, isAuthor, refetch, name, modalKey }: { discordId: string, name: string; isAuthor: boolean; refetch(): void; modalKey?: string; }
+) {
     const { token } = Auth;
     const editorRef = useRef<any>(null);
-    const inputType = ChatInputTypes.FORM;
+    const inputType = ChatInputTypes.USER_PROFILE_REPLY;
     inputType.disableAutoFocus = true;
 
     const channel = createChannelRecordFromServer({ id: "0", type: 1 });
@@ -132,7 +138,7 @@ export function ReviewsInputComponent({ discordId, isAuthor, refetch, name }: { 
         <>
             <div onClick={() => {
                 if (!token) {
-                    showToast("Opening authorization window...");
+                    showToast({ text: "Opening authorization window..." });
                     authorize();
                 }
             }}>
@@ -149,6 +155,7 @@ export function ReviewsInputComponent({ discordId, isAuthor, refetch, name }: { 
                     type={inputType}
                     disableThemedBackground={true}
                     setEditorRef={ref => editorRef.current = ref}
+                    parentModalKey={modalKey}
                     textValue=""
                     onSubmit={
                         async res => {

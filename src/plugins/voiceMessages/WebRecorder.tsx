@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { Button, useState } from "@webpack/common";
+import { Button, MediaEngineStore, useState } from "@webpack/common";
 
 import type { VoiceRecorder } from ".";
 import { settings } from "./settings";
@@ -40,6 +40,7 @@ export const VoiceRecorderWeb: VoiceRecorder = ({ setAudioBlob, onRecordingChang
                 audio: {
                     echoCancellation: settings.store.echoCancellation,
                     noiseSuppression: settings.store.noiseSuppression,
+                    deviceId: MediaEngineStore.getInputDeviceId()
                 }
             }).then(stream => {
                 const chunks = [] as Blob[];
@@ -62,6 +63,7 @@ export const VoiceRecorderWeb: VoiceRecorder = ({ setAudioBlob, onRecordingChang
                     changeRecording(false);
                 });
                 recorder.stop();
+                recorder.stream.getTracks().forEach(track => track.stop());
             }
         }
     }

@@ -19,9 +19,11 @@
 import "./style.css";
 
 import { addServerListElement, removeServerListElement, ServerListRenderPosition } from "@api/ServerList";
+import { TextButton } from "@components/Button";
+import ErrorBoundary from "@components/ErrorBoundary";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { Button, FluxDispatcher, GuildChannelStore, GuildStore, React, ReadStateStore } from "@webpack/common";
+import { ActiveJoinedThreadsStore, FluxDispatcher, GuildChannelStore, GuildStore, React, ReadStateStore } from "@webpack/common";
 
 function onClick() {
     const channels: Array<any> = [];
@@ -29,6 +31,10 @@ function onClick() {
     Object.values(GuildStore.getGuilds()).forEach(guild => {
         GuildChannelStore.getChannels(guild.id).SELECTABLE
             .concat(GuildChannelStore.getChannels(guild.id).VOCAL)
+            .concat(
+                Object.values(ActiveJoinedThreadsStore.getActiveJoinedThreadsForGuild(guild.id))
+                    .flatMap(threadChannels => Object.values(threadChannels))
+            )
             .forEach((c: { channel: { id: string; }; }) => {
                 if (!ReadStateStore.hasUnread(c.channel.id)) return;
 
@@ -48,23 +54,23 @@ function onClick() {
 }
 
 const ReadAllButton = () => (
-    <Button
+    <TextButton
+        variant="secondary"
         onClick={onClick}
-        size={Button.Sizes.MIN}
-        color={Button.Colors.CUSTOM}
         className="vc-ranb-button"
     >
         Read All
-    </Button>
+    </TextButton>
 );
 
 export default definePlugin({
     name: "ReadAllNotificationsButton",
     description: "Read all server notifications with a single button click!",
+    tags: ["Notifications", "Shortcuts"],
     authors: [Devs.kemo],
     dependencies: ["ServerListAPI"],
 
-    renderReadAllButton: () => <ReadAllButton />,
+    renderReadAllButton: ErrorBoundary.wrap(ReadAllButton, { noop: true }),
 
     start() {
         addServerListElement(ServerListRenderPosition.Above, this.renderReadAllButton);

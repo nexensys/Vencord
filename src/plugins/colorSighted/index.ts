@@ -23,6 +23,7 @@ export default definePlugin({
     name: "ColorSighted",
     description: "Removes the colorblind-friendly icons from statuses, just like 2015-2017 Discord",
     authors: [Devs.lewisakura],
+    tags: ["Appearance", "Accessibility"],
     patches: [
         {
             find: "Masks.STATUS_ONLINE",
@@ -34,9 +35,9 @@ export default definePlugin({
         {
             find: ".AVATAR_STATUS_MOBILE_16;",
             replacement: {
-                match: /(?<=fromIsMobile:\i=!0,.+?)status:(\i)/,
+                match: /(fromIsMobile:\i=!0,.+?)status:(\i)/,
                 // Rename field to force it to always use "online"
-                replace: 'status_$:$1="online"'
+                replace: '$1status_$:$2="online"'
             }
         }
     ]
